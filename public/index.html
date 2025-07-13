@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pixel War en ligne</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #fff;
+    font-family: Arial, sans-serif;
+    user-select: none;
+  }
+  #canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    cursor: grab;
+    background: #fff;
+  }
+  #canvas.grabbing {
+    cursor: grabbing;
+  }
+  #paletteToggle {
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 15;
+    background: #333;
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+  #palette {
+    position: fixed;
+    top: 50px;
+    left: 10px;
+    z-index: 15;
+    background: rgba(50,50,50,0.9);
+    padding: 10px;
+    border-radius: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: 250px;
+    user-select: none;
+  }
+  .color-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 2px solid transparent;
+  }
+  .color-btn.selected {
+    border-color: white;
+  }
+  #info {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-weight: bold;
+    font-size: 14px;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+
+<button id="paletteToggle">Palette</button>
+<div id="palette" style="display:none;"></div>
+<div id="info">Chargement...</div>
+<canvas id="canvas"></canvas>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const paletteToggle = document.getElementById('paletteToggle');
+const palette = document.getElementById('palette');
+const info = document.getElementById('info');
+
+const colors = [
+  '#0000FF', '#FF0000', '#FFFFFF', '#000000', 
+  '#00FF00', '#FFFF00', '#FFA500', '#FF69B4'
+];
+
+let width, height;
+let gridSize = 200;
+let pixelSize = 10;
+let scale = 1;
+let offsetX = 0;
+let offsetY = 0;
+let currentColor = colors[0];
+let lastPaintTime = 0;
+const waitTime = 5 * 60 * 1000;
+
+let grid = [];
+for(let i=0; i<gridSize; i++) {
+  grid[i] = [];
+  for(let j=0; j<gridSize; j++) {
+    grid[i][j] = '#FFFFFF';
+  }
+}
+
+function resizeCanvas() {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  canvas.width = width;
+  canvas.height = height;
+  drawGrid();
+}
+
+function drawGrid() {
+  ctx.clearRect(0, 0, width, height);
+  ctx.save();
+  ctx.translate(offsetX, offsetY);
+  ctx.scale(scale, scale);
+
+  for(let i=0; i<gridSize; i++) {
+    for(let j=0; j<gridSize; j++) {
+      ctx.fillStyle = grid[i][j];
+      ctx.fillRect(i*pixelSize, j*pixelSize, pixelSize, pixelSize);
+    }
+  }
+  ctx.restore();
+}
+
+function updateInfo() {
+  const tLeft = waitTime - (Date.now() - lastPaintTime);
+  if(tLeft > 0) {
+    info.textContent = `Temps avant prochain pixel : ${Math.ceil(tLeft/1000)} sec`;
+    palette.style.display = 'none';
+  } else {
+    info.textContent = 'Tu peux peindre un pixel';
+    palette.style.display = 'flex';
+  }
+}
+
+setInterval(updateInfo, 1000);
+
+function initPalette() {
+  palette.innerHTML = '';
+  colors.forEach(c => {
+    const btn = document.createElement('div');
+    btn.classList.add('color-btn');
+    btn.style.backgroundColor = c;
+    if(c === currentColor) btn.classList.add('selected');
+    btn.addEventListener('click', () => {
+      currentColor = c;
+      document.querySelectorAll('.color-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+    palette.appendChild(btn);
+  });
+}
+
+canvas.addEventListener('click', e => {
+  const now = Date.now();
+  if(now - lastPaintTime < waitTime) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left - offsetX) / scale;
+  const y = (e.clientY - rect.top - offsetY) / scale;
+  const i = Math.floor(x / pixelSize);
+  const j = Math.floor(y / pixelSize);
+
+  if(i >= 0 && i < gridSize && j >= 0 && j < gridSize) {
+    socket.emit('paintPixel', {x: i, y: j, color: currentColor});
+    lastPaintTime = now;
+    updateInfo();
+  }
+});
+
+paletteToggle.addEventListener('click', () => {
+  if(palette.style.display === 'flex') {
+    palette.style.display = 'none';
+  } else if(Date.now() - lastPaintTime >= waitTime) {
+    palette.style.display = 'flex';
+  }
+});
+
+let isDragging = false;
+let dragStartX, dragStartY;
+
+canvas.addEventListener('mousedown', e => {
+  if(Date.now() - lastPaintTime < waitTime) {
+    isDragging = true;
+    dragStartX = e.clientX - offsetX;
+    dragStartY = e.clientY - offsetY;
+    canvas.classList.add('grabbing');
+  }
+});
+
+canvas.addEventListener('mouseup', e => {
+  isDragging = false;
+  canvas.classList.remove('grabbing');
+});
+
+canvas.addEventListener('mouseleave', e => {
+  isDragging = false;
+  canvas.classList.remove('grabbing');
+});
+
+canvas.addEventListener('mousemove', e => {
+  if(isDragging) {
+    offsetX = e.clientX - dragStartX;
+    offsetY = e.clientY - dragStartY;
+    drawGrid();
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const zoomAmount = -e.deltaY * 0.0015;
+  const mouseX = e.clientX;
+  const mouseY = e.clientY;
+
+  const newScale = Math.min(Math.max(0.5, scale + zoomAmount), 20);
+  offsetX -= (mouseX - offsetX) * (newScale/scale - 1);
+  offsetY -= (mouseY - offsetY) * (newScale/scale - 1);
+  scale = newScale;
+  drawGrid();
+}, { passive: false });
+
+socket.on('gridData', data => {
+  grid = data;
+  drawGrid();
+  info.textContent = 'Grille chargée, tu peux commencer à peindre';
+  palette.style.display = 'flex';
+});
+
+socket.on('pixelUpdate', ({x, y, color}) => {
+  grid[x][y] = color;
+  drawGrid();
+});
+
+window.addEventListener('resize', resizeCanvas);
+
+initPalette();
+resizeCanvas();
+updateInfo();
+</script>
+
+</body>
+</html>
